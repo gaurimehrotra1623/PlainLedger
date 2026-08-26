@@ -983,8 +983,8 @@ h1, h2, h3, h4, p {
 .chat-panel {
   width: min(380px, calc(100vw - 32px));
   max-height: min(580px, calc(100vh - 120px));
-  display: grid;
-  grid-template-rows: auto minmax(160px, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--surface-solid);
   border: 1px solid var(--border);
@@ -1011,6 +1011,7 @@ h1, h2, h3, h4, p {
 }
 
 .chat-panel-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
@@ -1060,6 +1061,8 @@ h1, h2, h3, h4, p {
 }
 
 .chat-messages {
+  flex: 1 1 0;
+  min-height: 0;
   display: grid;
   align-content: start;
   gap: var(--space-3);
@@ -1274,6 +1277,7 @@ h1, h2, h3, h4, p {
 }
 
 .chat-form {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
@@ -1783,15 +1787,11 @@ body {
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 768px) {
   .chatbot {
+    position: fixed;
     inset: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    pointer-events: none;
+    z-index: 10;
   }
 
   .chat-toggle {
@@ -1799,18 +1799,26 @@ body {
     right: 16px;
     bottom: 16px;
     z-index: 20;
-    pointer-events: auto;
   }
 
   .chat-panel {
     position: fixed;
     inset: 0;
-    width: 100vw;
+    width: 100%;
     height: 100vh;
-    max-height: 100vh;
+    height: 100dvh;
+    max-height: none;
     border-radius: 0;
-    pointer-events: auto;
+    border: none;
     z-index: 21;
+  }
+
+  .chat-form input {
+    font-size: 16px;
+  }
+
+  .chat-form {
+    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
   }
 }
 
