@@ -563,6 +563,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const reportCache = useRef(new Map<string, CompanyReport>());
+  const autoOpenRef = useRef(false);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const savedTheme = localStorage.getItem('plainledger-theme');
     return savedTheme === 'light' ? 'light' : 'dark';
@@ -609,9 +610,17 @@ function App() {
   }, [companies, query, selectedSector]);
 
   const handleCompanySelect = (ticker: string) => {
-    if (ticker === selectedTicker) return;
+    if (ticker === selectedTicker) {
+      if (report && window.innerWidth <= 768 && !detailedView) {
+        setDetailedView(true);
+      }
+      return;
+    }
     setSelectedTicker(ticker);
     setReport(null);
+    if (window.innerWidth <= 768) {
+      autoOpenRef.current = true;
+    }
   };
 
   useEffect(() => {
@@ -635,6 +644,10 @@ function App() {
 
         reportCache.current.set(selectedTicker, data.report);
         setReport(data.report);
+        if (autoOpenRef.current && window.innerWidth <= 768) {
+          setDetailedView(true);
+          autoOpenRef.current = false;
+        }
       } catch (loadError) {
         if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
         if (active) setError(loadError instanceof Error ? loadError.message : 'Something went wrong.');
