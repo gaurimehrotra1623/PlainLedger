@@ -8,6 +8,7 @@
     "dev:client": "vite",
     "dev:server": "node --env-file=.env server/index.js",
     "build": "tsc -b && vite build",
+    "vercel-build": "npm run build",
     "preview": "vite preview",
     "start": "node --env-file=.env server/index.js"
   },
