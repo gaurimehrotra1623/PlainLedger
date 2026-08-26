@@ -950,8 +950,9 @@ h1, h2, h3, h4, p {
   right: var(--space-6);
   bottom: var(--space-6);
   z-index: 10;
-  display: grid;
-  justify-items: end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: var(--space-3);
 }
 
@@ -982,7 +983,7 @@ h1, h2, h3, h4, p {
 
 .chat-panel {
   width: min(380px, calc(100vw - 32px));
-  max-height: min(580px, calc(100vh - 120px));
+  height: min(580px, calc(100vh - 120px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1792,6 +1793,7 @@ body {
     position: fixed;
     inset: 0;
     z-index: 10;
+    pointer-events: none;
   }
 
   .chat-toggle {
@@ -1799,6 +1801,7 @@ body {
     right: 16px;
     bottom: 16px;
     z-index: 20;
+    pointer-events: auto;
   }
 
   .chat-panel {
@@ -1811,6 +1814,7 @@ body {
     border-radius: 0;
     border: none;
     z-index: 21;
+    pointer-events: auto;
   }
 
   .chat-form input {
