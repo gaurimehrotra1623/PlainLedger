@@ -4,6 +4,42 @@ import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
 
+function useCountUp(end: number, duration = 800, start = 0) {
+  const [count, setCount] = useState(start);
+  const [isVisible, setIsVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.5 }
+    );
+    if (ref.current) observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) return;
+    let startTime: number;
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCount(Math.floor(start + (end - start) * eased));
+      if (progress < 1) requestAnimationFrame(animate);
+      else setCount(end);
+    };
+    requestAnimationFrame(animate);
+  }, [isVisible, end, duration, start]);
+
+  return { count, ref };
+}
+
 type CompanyDirectoryItem = {
   cik: string;
   ticker: string;
@@ -50,11 +86,39 @@ type ChatMessage = {
 
 const defaultQuery = 'AAPL';
 
-function formatValue(value: number) {
+function formatCurrency(value: number): string {
   if (Math.abs(value) >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
   if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
   if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(2)}K`;
   return `$${value.toFixed(0)}`;
+}
+
+function formatNumber(value: number): string {
+  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return `${value.toFixed(0)}`;
+}
+
+function parseValue(str: string): number {
+  const match = str.match(/[\d.]+/);
+  if (!match) return 0;
+  const num = parseFloat(match[0]);
+  if (str.includes('B')) return num * 1_000_000_000;
+  if (str.includes('M')) return num * 1_000_000;
+  if (str.includes('K')) return num * 1_000;
+  return num;
+}
+
+function StatCountUp({ value, label, type = 'currency' }: { value: string; label: string; type?: 'currency' | 'number' }) {
+  const num = parseValue(value);
+  const { count, ref } = useCountUp(num);
+  const display = type === 'currency' ? formatCurrency(count) : formatNumber(count);
+  return (
+    <strong ref={ref} style={{ fontVariantNumeric: 'tabular-nums' }}>
+      {display}
+    </strong>
+  );
 }
 
 function formatDate(date: string) {
@@ -63,6 +127,13 @@ function formatDate(date: string) {
 
 function Chart({ label, points }: { label: string; points: ChartPoint[] }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const pathRef = useRef<SVGPathElement>(null);
+  const areaRef = useRef<SVGPathElement>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   if (!points.length) {
     return (
@@ -89,10 +160,35 @@ function Chart({ label, points }: { label: string; points: ChartPoint[] }) {
     y: chartTop + (1 - (point.value - min) / range) * chartHeight,
   });
   const coordinates = points.map(toPoint);
-  const path = coordinates.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+
+  // Generate smooth curve path using cubic bezier
+  const smoothPath = coordinates.map((point, index) => {
+    if (index === 0) return `M ${point.x} ${point.y}`;
+    const prev = coordinates[index - 1];
+    const cpX = (prev.x + point.x) / 2;
+    return `C ${cpX} ${prev.y} ${cpX} ${point.y} ${point.x} ${point.y}`;
+  }).join(' ');
+
+  // Generate area path (extends smooth path down to bottom)
+  const areaPath = [
+    `M ${coordinates[0].x} ${chartTop + chartHeight}`,
+    ...coordinates.map((point, index) => {
+      if (index === 0) return `L ${point.x} ${point.y}`;
+      const prev = coordinates[index - 1];
+      const cpX = (prev.x + point.x) / 2;
+      return `C ${cpX} ${prev.y} ${cpX} ${point.y} ${point.x} ${point.y}`;
+    }),
+    `L ${coordinates[coordinates.length - 1].x} ${chartTop + chartHeight}`,
+    'Z'
+  ].join(' ');
+
   const activePoint = points[activeIndex ?? points.length - 1];
   const yLabels = [max, min + range / 2, min];
   const axisIndexes = Array.from(new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]));
+  const pathLength = pathRef.current?.getTotalLength() ?? 0;
+
+  // Sanitize label for SVG ID (remove spaces, special chars)
+  const gradientId = `chart-gradient-${label.replace(/\s+/g, '-').toLowerCase()}`;
 
   return (
     <div className="chart">
@@ -100,7 +196,7 @@ function Chart({ label, points }: { label: string; points: ChartPoint[] }) {
         <h4>{label}</h4>
         <div className="chart-readout">
           <span>{formatDate(activePoint.date)}</span>
-          <strong>{formatValue(activePoint.value)}</strong>
+          <strong>{formatCurrency(activePoint.value)}</strong>
         </div>
       </div>
       <svg
@@ -109,20 +205,62 @@ function Chart({ label, points }: { label: string; points: ChartPoint[] }) {
         aria-label={`${label} over time chart`}
         onMouseLeave={() => setActiveIndex(null)}
       >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
+            <stop offset="60%" stopColor="var(--accent)" stopOpacity="0.08" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
         {yLabels.map((value, index) => {
           const y = chartTop + (index / (yLabels.length - 1)) * chartHeight;
           return (
             <g key={`${label}-y-${index}`}>
               <line x1={chartLeft} x2={width - chartRight} y1={y} y2={y} className="chart-gridline" />
-              <text x={chartLeft - 8} y={y + 4} textAnchor="end" className="chart-axis-label">{formatValue(value)}</text>
+              <text x={chartLeft - 8} y={y + 4} textAnchor="end" className="chart-axis-label">{formatCurrency(value)}</text>
             </g>
           );
         })}
-        {activeIndex !== null ? <line x1={coordinates[activeIndex].x} x2={coordinates[activeIndex].x} y1={chartTop} y2={chartTop + chartHeight} className="chart-hover-line" /> : null}
-        <path d={path} className="chart-line" />
+        {activeIndex !== null ? (
+          <g className="chart-hover-group">
+            <line x1={coordinates[activeIndex].x} x2={coordinates[activeIndex].x} y1={chartTop} y2={chartTop + chartHeight} className="chart-hover-line" />
+            <circle
+              cx={coordinates[activeIndex].x}
+              cy={coordinates[activeIndex].y}
+              r={6}
+              className="chart-hover-marker"
+            />
+            <circle
+              cx={coordinates[activeIndex].x}
+              cy={coordinates[activeIndex].y}
+              r={10}
+              className="chart-hover-ring"
+            />
+          </g>
+        ) : null}
+        <path
+          ref={areaRef}
+          d={areaPath}
+          className="chart-area"
+          style={{
+            fill: `url(#${gradientId})`,
+            opacity: isMounted ? 1 : 0,
+            transition: 'opacity 600ms cubic-bezier(0.2, 0, 0, 1) 200ms',
+          }}
+        />
+        <path
+          ref={pathRef}
+          d={smoothPath}
+          className="chart-line"
+          style={{
+            strokeDasharray: isMounted ? pathLength : 0,
+            strokeDashoffset: isMounted ? 0 : pathLength,
+            transition: isMounted ? 'stroke-dashoffset 800ms cubic-bezier(0.2, 0, 0, 1)' : 'none',
+          }}
+        />
         {coordinates.map((point, index) => (
           <g key={`${label}-${points[index].date}`}>
-            <circle cx={point.x} cy={point.y} r="13" className="chart-hit-area" onMouseEnter={() => setActiveIndex(index)} onFocus={() => setActiveIndex(index)} tabIndex={0} aria-label={`${formatDate(points[index].date)}: ${formatValue(points[index].value)}`} />
+            <circle cx={point.x} cy={point.y} r="13" className="chart-hit-area" onMouseEnter={() => setActiveIndex(index)} onFocus={() => setActiveIndex(index)} tabIndex={0} aria-label={`${formatDate(points[index].date)}: ${formatCurrency(points[index].value)}`} />
             <circle cx={point.x} cy={point.y} r={index === activeIndex ? 5 : 3} className={`chart-point ${index === activeIndex ? 'active' : ''}`} />
             {axisIndexes.includes(index) ? <text x={point.x} y={height - 12} textAnchor="middle" className="chart-axis-label">{formatDate(points[index].date)}</text> : null}
           </g>
@@ -139,16 +277,66 @@ function normalizeAssistantMarkdown(content: string) {
     .replace(/\\\[/g, '$$')
     .replace(/\\\]/g, '$$')
     .replace(/\\\(/g, '$')
-    .replace(/\\\)/g, '$');
+    .replace(/\\\)/g, '$')
+    .replace(/\\text\{([^}]+)\}/g, '$1')
+    .replace(/\\mathrm\{([^}]+)\}/g, '$1')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\pm/g, '±')
+    .replace(/\\le/g, '≤')
+    .replace(/\\ge/g, '≥')
+    .replace(/\\neq/g, '≠')
+    .replace(/\\infty/g, '∞')
+    .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
+    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1) / ($2)');
+}
+
+function AssistantMessage({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[[rehypeKatex, { throwOnError: false, output: 'htmlAndMathml' }]]}
+      components={{
+        span: ({ node, children, ...props }) => {
+          const nodeData = node as { data?: { mathDisplay?: string } };
+          if (nodeData.data?.mathDisplay === 'block') {
+            return <div className="math-formula">{children}</div>;
+          }
+          return <span {...props}>{children}</span>;
+        },
+        code: ({ node, children, ...props }) => {
+          const nodeData = node as { data?: { mathDisplay?: string } };
+          if (nodeData.data?.mathDisplay === 'inline') {
+            return <span className="math-inline">{children}</span>;
+          }
+          return <code {...props}>{children}</code>;
+        },
+      }}
+    >
+      {normalizeAssistantMarkdown(content)}
+    </ReactMarkdown>
+  );
 }
 
 function Chatbot({ report }: { report: CompanyReport | null }) {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: 'Hi! I’m Milo. Let’s make finance simple.' },
+    { role: 'assistant', content: 'Hi! I\'m Milo. Let\'s make finance simple.' },
   ]);
   const [loading, setLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+
+  const suggestedPrompts = report
+    ? [
+        'Explain the revenue trend',
+        'What does the debt level mean?',
+        'Is the profit margin healthy?',
+        'Key risks to watch',
+      ]
+    : ['How do I read this data?', 'What is net income?', 'Explain assets vs liabilities'];
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
@@ -159,6 +347,7 @@ function Chatbot({ report }: { report: CompanyReport | null }) {
     setMessages(nextMessages);
     setInput('');
     setLoading(true);
+    setShowSuggestions(false);
 
     try {
       const response = await fetch('/api/chat', {
@@ -190,10 +379,32 @@ function Chatbot({ report }: { report: CompanyReport | null }) {
           <div className="chat-messages" aria-live="polite">
             {messages.map((chatMessage, index) => (
               <div key={`${chatMessage.role}-${index}`} className={`chat-message ${chatMessage.role}`}>
-                {chatMessage.role === 'assistant' ? <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeAssistantMarkdown(chatMessage.content)}</ReactMarkdown> : chatMessage.content}
+                {chatMessage.role === 'assistant' ? <AssistantMessage content={chatMessage.content} /> : chatMessage.content}
               </div>
             ))}
-            {loading ? <div className="chat-message assistant">Reading the page...</div> : null}
+            {loading && (
+              <div className="chat-message assistant typing-indicator" aria-label="Milo is thinking">
+                <span></span><span></span><span></span>
+              </div>
+            )}
+            {!loading && showSuggestions && messages.length === 1 && (
+              <div className="chat-suggestions" role="list" aria-label="Suggested questions">
+                {suggestedPrompts.map((prompt, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="chat-suggestion"
+                    onClick={() => {
+                      setInput(prompt);
+                      setShowSuggestions(false);
+                    }}
+                    role="listitem"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <form className="chat-form" onSubmit={sendMessage}>
             <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask about this company..." aria-label="Ask the PlainLedger assistant" disabled={loading} />
@@ -210,9 +421,18 @@ function Chatbot({ report }: { report: CompanyReport | null }) {
 
 function ThemeToggle({ theme, onToggle }: { theme: 'dark' | 'light'; onToggle: () => void }) {
   return (
-    <button type="button" className={`theme-toggle ${theme === 'light' ? 'light-active' : ''}`} onClick={onToggle} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-pressed={theme === 'light'}>
-      <span className="theme-toggle-track" aria-hidden="true"><span className="theme-toggle-thumb">{theme === 'dark' ? '\u263E' : '\u2600'}</span></span>
-      <span className="theme-toggle-label">{theme === 'dark' ? 'Dark' : 'Light'}</span>
+    <button
+      type="button"
+      className={`theme-toggle ${theme === 'light' ? 'theme-toggle-light' : ''}`}
+      onClick={onToggle}
+      aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      aria-pressed={theme === 'light'}
+    >
+      <span className="theme-toggle-label">Dark</span>
+      <span className="theme-toggle-track" aria-hidden="true">
+        <span className="theme-toggle-thumb">{theme === 'dark' ? '\u263E' : '\u2600'}</span>
+      </span>
+      <span className="theme-toggle-label">Light</span>
     </button>
   );
 }
@@ -222,8 +442,9 @@ function DetailedView({ report, onBack, theme, onToggleTheme }: { report: Compan
     <div className="app-shell detail-page">
       <header className="detail-page-header">
         <div className="detail-page-toolbar">
-          <button type="button" className="back-button" onClick={onBack} aria-label="Back to company directory">
-            <span aria-hidden="true">&#8592;</span> Back to directory
+          <button type="button" className="btn btn-secondary btn-secondary-sm" onClick={onBack} aria-label="Back to company directory">
+            <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            Back to directory
           </button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         </div>
@@ -249,7 +470,7 @@ function DetailedView({ report, onBack, theme, onToggleTheme }: { report: Compan
           {report.metrics.map((metric) => (
             <article key={metric.label} className="large-stat-card">
               <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
+              <StatCountUp value={metric.value} label={metric.label} />
               <small>{metric.detail}</small>
             </article>
           ))}
@@ -481,15 +702,15 @@ function App() {
           <p>Browse the SEC Edgar universe and compare companies with plain-English summaries, filters and time-series charts.</p>
           <div className="stat-strip">
             <div>
-              <strong>{companies.length.toLocaleString()}</strong>
+              <StatCountUp value={companies.length.toLocaleString()} label="companies" type="number" />
               <span>companies</span>
             </div>
             <div>
-              <strong>{sectors.length - 1}</strong>
+              <StatCountUp value={(sectors.length - 1).toString()} label="sector filters" type="number" />
               <span>sector filters</span>
             </div>
             <div>
-              <strong>500+</strong>
+              <StatCountUp value="500" label="large-cap style watchlist" type="number" />
               <span>large-cap style watchlist</span>
             </div>
           </div>
@@ -502,7 +723,7 @@ function App() {
               id="company-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search company name or ticker..."
+              placeholder="Type here..."
             />
             <button className="primary-button" type="submit" disabled={loading}>
               {loading ? 'Searching...' : 'Find company'}
@@ -535,7 +756,7 @@ function App() {
         <section className="company-list-panel">
           <div className="panel-header">
             <h3>{selectedSector === 'All' ? 'All companies' : `${selectedSector} companies`}</h3>
-            <span className="soft-pill">{visibleCompanies.length} results</span>
+            <span className="pill pill-soft">{visibleCompanies.length} results</span>
           </div>
 
           <div className="company-grid">
@@ -547,8 +768,8 @@ function App() {
                 onClick={() => handleCompanySelect(company.ticker)}
               >
                 <div className="company-topline">
-                  <span className="ticker-pill">{company.ticker}</span>
-                  <span className="sector-badge">{company.sector}</span>
+                  <span className="pill pill-ticker">{company.ticker}</span>
+                  <span className="pill pill-sector">{company.sector}</span>
                 </div>
                 <strong>{company.title}</strong>
               </button>
@@ -559,8 +780,9 @@ function App() {
         <aside className="company-detail-panel">
           {report ? (
             <>
-              <button type="button" className="detail-view-button" onClick={openDetailedView}>
-                Open detailed view <span aria-hidden="true">&#8594;</span>
+              <button type="button" className="btn btn-cta" onClick={openDetailedView}>
+                Open detailed view
+                <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
               </button>
 
               <div className="detail-header">
@@ -568,14 +790,14 @@ function App() {
                   <p className="eyebrow">Company overview</p>
                   <h3>{report.company.name}</h3>
                 </div>
-                <span className="soft-pill">{report.company.ticker}</span>
+<span className="pill pill-soft">{report.company.ticker}</span>
               </div>
 
               <div className="stats-grid">
                 {report.metrics.map((metric) => (
                   <article key={metric.label} className="stat-card">
                     <span>{metric.label}</span>
-                    <strong>{metric.value}</strong>
+                    <StatCountUp value={metric.value} label={metric.label} />
                     <small>{metric.detail}</small>
                   </article>
                 ))}
