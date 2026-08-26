@@ -4,6 +4,28 @@ import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
 
+// Safe fetch helper that checks response.ok and Content-Type before parsing JSON
+async function safeJsonFetch(url: string | URL, options?: RequestInit) {
+  const response = await fetch(url, options);
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    if (contentType.includes('application/json')) {
+      try {
+        const errorData = await response.json();
+        message = errorData.message || message;
+      } catch {
+        // ignore JSON parse error
+      }
+    }
+    throw new Error(message);
+  }
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Expected JSON response but got ${contentType || 'unknown content type'}`);
+  }
+  return response.json();
+}
+
 function useCountUp(end: number, duration = 800, start = 0) {
   const [count, setCount] = useState(start);
   const [isVisible, setIsVisible] = useState(false);
@@ -350,13 +372,11 @@ function Chatbot({ report }: { report: CompanyReport | null }) {
     setShowSuggestions(false);
 
     try {
-      const response = await fetch('/api/chat', {
+      const data = await safeJsonFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, history: nextMessages.slice(-8), pageContext: report }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'The assistant is unavailable right now.');
       setMessages((current) => [...current, { role: 'assistant', content: data.reply }]);
     } catch (chatError) {
       setMessages((current) => [...current, { role: 'assistant', content: chatError instanceof Error ? chatError.message : 'The assistant is unavailable right now.' }]);
@@ -557,13 +577,16 @@ function App() {
 
   useEffect(() => {
     const loadDirectory = async () => {
-      const response = await fetch('/api/companies');
-      const data = await response.json();
-      const nextCompanies = data.companies ?? [];
-      setCompanies(nextCompanies);
-      setResults(nextCompanies.slice(0, 12));
-      if (nextCompanies[0]) {
-        setSelectedTicker(nextCompanies[0].ticker);
+      try {
+        const data = await safeJsonFetch('/api/companies');
+        const nextCompanies = data.companies ?? [];
+        setCompanies(nextCompanies);
+        setResults(nextCompanies.slice(0, 12));
+        if (nextCompanies[0]) {
+          setSelectedTicker(nextCompanies[0].ticker);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load company directory');
       }
     };
 
@@ -608,12 +631,7 @@ function App() {
       setError('');
 
       try {
-        const response = await fetch(`/api/company/${encodeURIComponent(selectedTicker)}`, { signal: controller.signal });
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.message || 'Unable to load company data.');
-        }
+        const data = await safeJsonFetch(`/api/company/${encodeURIComponent(selectedTicker)}`, { signal: controller.signal });
 
         reportCache.current.set(selectedTicker, data.report);
         setReport(data.report);
@@ -644,8 +662,7 @@ function App() {
     setError('');
 
     try {
-      const response = await fetch(`/api/search?query=${encodeURIComponent(query.trim())}`);
-      const data = await response.json();
+      const data = await safeJsonFetch(`/api/search?query=${encodeURIComponent(query.trim())}`);
       const nextResults = data.results ?? [];
       setResults(nextResults.slice(0, 12));
 
